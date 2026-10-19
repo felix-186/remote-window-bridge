@@ -1,0 +1,30 @@
+[package]
+name = "airemotecontrol"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83"
+description = "Agent-independent desktop control over an existing remote desktop window"
+license = "MIT"
+
+[features]
+# Type-check native bindings on a non-Windows development host. Do not ship this feature.
+windows-api-check = []
+
+[dependencies]
+serde = { version = "=1.0.217", features = ["derive"] }
+serde_json = "=1.0.134"
+base64 = "=0.21.7"
+flate2 = "=1.0.35"
+crc32fast = "=1.4.2"
+sha2 = "=0.10.8"
+windows-sys = { version = "=0.59.0", features = [
+  "Win32_Foundation", "Win32_Security", "Win32_Graphics_Gdi",
+  "Win32_System_Threading", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Dwm",
+  "Win32_System_StationsAndDesktops", "Win32_System_RemoteDesktop",
+] }
+
+[profile.release]
+lto = true
+strip = true
+

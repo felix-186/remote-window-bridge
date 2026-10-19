@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AIRemoteControl 远端验收页</title>
+<style>
+body{font:18px system-ui,sans-serif;max-width:960px;margin:32px auto;padding:0 24px;color:#17202a;background:#f5f7fa}
+h1{font-size:28px}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:24px 0}
+button,input,textarea{font:inherit;border:2px solid #52637a;border-radius:8px;padding:16px;background:white}
+button{cursor:pointer;min-height:80px}button:hover{background:#dbeafe}button:focus,input:focus,textarea:focus{outline:4px solid #f59e0b}
+input,textarea{box-sizing:border-box;width:100%;margin:8px 0}pre{white-space:pre-wrap;background:#17202a;color:#dcfce7;padding:20px;border-radius:8px;min-height:110px}
+.scroll{height:140px;overflow:auto;border:2px solid #52637a;padding:12px;background:white}.scroll p{margin:30px 0}
+</style>
+<h1>AIRemoteControl 远端验收页</h1>
+<p>核对真实远端点击、文字和键盘反馈；页面无网络请求。</p>
+<p>点击次数：<strong id="count">0</strong>　输入字符数：<strong id="length">0</strong></p>
+<div class="grid" id="grid"></div>
+<label for="text">文字输入：Hello 远程电脑 123 😀</label><input id="text" autocomplete="off" placeholder="先点击，再输入文字">
+<label for="multi">多行输入 / Enter / Ctrl+A</label><textarea id="multi" rows="3"></textarea>
+<div class="scroll" id="scroll"><p>第一项</p><p>第二项</p><p>第三项</p><p>第四项</p><p>最后一项</p></div>
+<pre id="events" aria-live="polite">等待操作…</pre>
+<script>
+const log=document.querySelector('#events');let count=0;const lines=[];
+function record(message){lines.unshift(new Date().toLocaleTimeString()+' '+message);log.textContent=lines.slice(0,6).join('\n')}
+for(let i=1;i<=9;i++){const b=document.createElement('button');b.textContent='目标 '+i;b.addEventListener('click',e=>{document.querySelector('#count').textContent=++count;record('目标 '+i+' click，页面坐标 '+e.clientX+','+e.clientY)});b.addEventListener('dblclick',()=>record('目标 '+i+' double click'));b.addEventListener('contextmenu',e=>{e.preventDefault();record('目标 '+i+' right click')});document.querySelector('#grid').append(b)}
+document.querySelector('#text').addEventListener('input',e=>{document.querySelector('#length').textContent=Array.from(e.target.value).length;record('文字：'+e.target.value)});
+document.querySelector('#multi').addEventListener('input',e=>record('多行文字：'+e.target.value));
+document.querySelector('#scroll').addEventListener('scroll',e=>record('滚动位置：'+e.target.scrollTop));
+document.addEventListener('keydown',e=>{if(!['Shift','Control','Alt'].includes(e.key))record('键盘：'+(e.ctrlKey?'Ctrl+':'')+(e.altKey?'Alt+':'')+e.key)});
+</script>
+</html>
