@@ -1,4 +1,4 @@
-use airemotecontrol::{
+use remote_window_bridge::{
     audit::Audit,
     control::{Cancellation, Control},
     error::{DesktopError, Result},
@@ -24,7 +24,7 @@ struct Temp(PathBuf);
 impl Temp {
     fn new() -> Self {
         let p = std::env::temp_dir().join(format!(
-            "airc-test-{}-{}",
+            "remote-window-bridge-test-{}-{}",
             std::process::id(),
             SEQUENCE.fetch_add(1, Ordering::SeqCst)
         ));

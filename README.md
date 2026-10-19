@@ -1,10 +1,10 @@
-# AIRemoteControl
+# remote-window-bridge
 
 [简体中文](README.md) | [English](README.en.md)
 
 Rust 编写的远程桌面控制工具。Codex、Claude Code 或其他 MCP Agent，通过本机已经连接的 RDP / ToDesk / 向日葵窗口观察、点击和输入；远端无需安装本项目服务。
 
-当前版本：**Windows CLI + MCP stdio 初版**。macOS/Linux 可编译和测试公共内核，真实桌面后端尚未实现。当前开发环境为 macOS，Windows API 已进行类型检查，真实远程客户端行为仍需实机测试。
+当前版本：**0.1.0，Windows CLI + MCP stdio 初版**。macOS/Linux 可编译和测试公共内核，真实桌面后端尚未实现。构建、类型检查与测试不能替代 Windows 远程客户端的实机验收。
 
 ## 已实现
 
@@ -26,40 +26,40 @@ Rust 编写的远程桌面控制工具。Codex、Claude Code 或其他 MCP Agent
 
 ```powershell
 cargo build --locked --release
-.\target\release\airemotecontrol.exe doctor
-.\target\release\airemotecontrol.exe windows
+.\target\release\remote-window-bridge.exe doctor
+.\target\release\remote-window-bridge.exe windows
 ```
 
 从 `windows` 输出获取远程窗口的 `identity.id`，替换下面的示意 ID：
 
 ```powershell
-.\target\release\airemotecontrol.exe capture --window win:a1234 --delay-ms 3000 --output preview.png
+.\target\release\remote-window-bridge.exe capture --window win:a1234 --delay-ms 3000 --output preview.png
 ```
 
 执行后有 3 秒切换到远程窗口。截图时目标必须前台、非最小化且无遮挡。检查图片，根据实际内容指定客户区内的 viewport，排除本地工具栏、黑边和侧栏：
 
 ```powershell
-.\target\release\airemotecontrol.exe capture --window win:a1234 --viewport 0,40,1280,720 --output preview.png
+.\target\release\remote-window-bridge.exe capture --window win:a1234 --viewport 0,40,1280,720 --output preview.png
 ```
 
 viewport 单位是物理像素，格式 `x,y,width,height`，示例尺寸不能直接套用。程序不负责建立远程连接或登录。
 
 ## 接入 Agent
 
-将 exe 放到固定路径，例如 `C:\AIRemoteControl\airemotecontrol.exe`。
+将 exe 放到固定路径，例如 `C:\remote-window-bridge\remote-window-bridge.exe`。
 
 Codex `config.toml`：
 
 ```toml
 [mcp_servers.remote_desktop]
-command = 'C:\AIRemoteControl\airemotecontrol.exe'
+command = 'C:\remote-window-bridge\remote-window-bridge.exe'
 args = ['mcp', '--transport', 'stdio']
 ```
 
 Claude Code：
 
 ```powershell
-claude mcp add --transport stdio remote_desktop -- C:\AIRemoteControl\airemotecontrol.exe mcp --transport stdio
+claude mcp add --transport stdio remote_desktop -- C:\remote-window-bridge\remote-window-bridge.exe mcp --transport stdio
 ```
 
 其他 Agent 使用同一 stdio 命令。客户端需能读取 MCP image content 才能直接理解截图；其自身的工具授权设置仍生效。同一 Windows 会话不要同时启动两个控制进程。
@@ -113,7 +113,7 @@ Windows 后端独立位于 [src/platform/windows.rs](src/platform/windows.rs)。
 
 ## 数据与限制
 
-Windows 默认目录 `%LOCALAPPDATA%\AIRemoteControl\data`；通过 `AIREMOTE_DATA_DIR` 或 `--data-dir` 修改。非 Windows 的协议开发默认使用当前目录 `data`。不同 Windows 登录会话应使用不同数据目录；当前 JSONL 审计不支持多进程共享写入。
+Windows 默认目录 `%LOCALAPPDATA%\remote-window-bridge\data`；通过 `REMOTE_WINDOW_BRIDGE_DATA_DIR` 或 `--data-dir` 修改。非 Windows 的协议开发默认使用当前目录 `data`。不同 Windows 登录会话应使用不同数据目录；当前 JSONL 审计不支持多进程共享写入。
 
 ```text
 data/
@@ -127,7 +127,59 @@ data/
 
 BitBlt 捕获要求窗口前台、可见、无遮挡；保守检测可能拒绝透明遮挡物。SendInput 是系统输入，不能消除所有焦点竞态；运行中不要与 Agent 同时操作。UAC 安全桌面、锁屏、权限不匹配不能自动跨越。HWND 不变的远程标签页切换不能通用识别，切换后暂停并重新绑定。文字、系统快捷键转发和各客户端行为需实机验证。
 
-## 开发验证
+## 开发与运行
+
+### 准备环境
+
+Windows 安装 Rust（包含 Cargo，使用 `stable-x86_64-pc-windows-msvc` 工具链）和 Visual Studio C++ Build Tools / Windows SDK。安装后重新打开终端，确认以下命令可用：
+
+```powershell
+rustc --version
+cargo --version
+```
+
+Rust 最低版本为 1.83，日常开发建议使用 stable。克隆项目并进入仓库根目录：
+
+```powershell
+git clone https://github.com/felix-186/remote-window-bridge.git
+cd remote-window-bridge
+cargo build --locked
+```
+
+调试程序位于 `target/debug/remote-window-bridge.exe`，发布程序位于 `target/release/remote-window-bridge.exe`。Rust 库的导入名为 `remote_window_bridge`。
+
+### 本地调试 CLI
+
+```powershell
+cargo run --locked -- --help
+cargo run --locked -- doctor
+cargo run --locked -- windows
+cargo run --locked -- capture --window win:a1234 --delay-ms 3000 --output preview.png --data-dir .local-data
+```
+
+`--` 后面是程序参数。先在本机连接 RDP / ToDesk / 向日葵，再从 `windows` 输出取实际窗口 ID 替换 `win:a1234`。`doctor` 输出平台能力，不会自动连接远端或完成实机验收。`capture` 默认等待 3000ms，可用 `--delay-ms` 设置为 0–60000ms；倒计时内切到目标窗口。首次不传 viewport 会捕获整个客户区，检查图片后用 `--viewport x,y,width,height` 排除本地界面。
+
+可在远端浏览器打开 [examples/remote-test-page.html](examples/remote-test-page.html)，检查点击、文字输入和快捷键结果。
+
+### 调试 MCP 服务
+
+先构建调试程序，再让 Agent 直接启动它。以下 Codex 配置假设仓库位于 `C:\work\code\GitHub\remote-window-bridge`，请改为实际绝对路径：
+
+```toml
+[mcp_servers.remote_desktop]
+command = 'C:\work\code\GitHub\remote-window-bridge\target\debug\remote-window-bridge.exe'
+args = ['mcp', '--transport', 'stdio', '--data-dir', 'C:\work\code\GitHub\remote-window-bridge\.local-data']
+```
+
+修改 Rust 代码后停止 Agent 的 MCP 服务，重新执行 `cargo build --locked`，再重启服务加载新程序。也可以在终端执行下列命令检查启动；服务等待客户端从 stdin 发送 MCP JSON-RPC 消息，每条一行，stdout 只输出协议消息，stderr 输出错误。它不是交互式命令行。
+
+```powershell
+cargo run --locked -- mcp --transport stdio --data-dir .local-data
+```
+
+`--data-dir` 仅适用于 `capture` 和 `mcp`，优先级高于环境变量 `REMOTE_WINDOW_BRIDGE_DATA_DIR`，再使用默认目录。相对路径以进程工作目录为准，因此 Agent 配置建议使用绝对路径。开发数据目录 `.local-data/` 已被 Git 忽略。
+
+### 开发检查
 
 ```sh
 cargo fmt --all -- --check
@@ -136,7 +188,7 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo check --locked --features windows-api-check
 ```
 
-最后一条允许非 Windows 主机类型检查原生代码，**不等于 Windows 链接或实机验收**。该开发特性不用于发布。CI 包含 Windows MSVC 构建，但仍需实际触发后检查结果。
+macOS/Linux 安装 Rust 后可运行上述构建和检查命令，以及 `doctor` 和 MCP 协议服务；窗口枚举、截图和输入会返回 `PLATFORM_UNSUPPORTED`。最后一条允许非 Windows 主机类型检查原生代码，**不等于 Windows 链接或实机验收**。该开发特性不用于发布。CI 包含 Windows MSVC 构建，并上传 `remote-window-bridge-windows-x64` 产物；实际结果以对应 workflow 运行为准。
 
 本版范围以本 README 和实现为准。
 

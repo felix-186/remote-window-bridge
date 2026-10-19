@@ -5,9 +5,9 @@ fn main() {
     {
         let path = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap())
             .join("assets/windows.manifest");
-        println!("cargo:rustc-link-arg-bin=airemotecontrol=/MANIFEST:EMBED");
+        println!("cargo:rustc-link-arg-bin=remote-window-bridge=/MANIFEST:EMBED");
         println!(
-            "cargo:rustc-link-arg-bin=airemotecontrol=/MANIFESTINPUT:{}",
+            "cargo:rustc-link-arg-bin=remote-window-bridge=/MANIFESTINPUT:{}",
             path.display()
         );
     }

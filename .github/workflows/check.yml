@@ -20,5 +20,5 @@ jobs:
       - if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: airemotecontrol-windows-x64
-          path: target/release/airemotecontrol.exe
+          name: remote-window-bridge-windows-x64
+          path: target/release/remote-window-bridge.exe

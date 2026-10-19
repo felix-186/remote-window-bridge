@@ -10,8 +10,9 @@ use std::{
 
 #[test]
 fn executable_speaks_json_lines_and_reports_unsupported_platform_honestly() {
-    let dir = std::env::temp_dir().join(format!("airc-stdio-{}", std::process::id()));
-    let mut child = Command::new(env!("CARGO_BIN_EXE_airemotecontrol"))
+    let dir =
+        std::env::temp_dir().join(format!("remote-window-bridge-stdio-{}", std::process::id()));
+    let mut child = Command::new(env!("CARGO_BIN_EXE_remote-window-bridge"))
         .args(["mcp", "--transport", "stdio", "--data-dir"])
         .arg(&dir)
         .stdin(Stdio::piped())
@@ -44,7 +45,10 @@ fn executable_speaks_json_lines_and_reports_unsupported_platform_honestly() {
         &mut guard.0,
         json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":{"name":"stdio-test","version":"1"},"capabilities":{}}}),
     );
-    assert_eq!(read()["result"]["serverInfo"]["name"], "airemotecontrol");
+    assert_eq!(
+        read()["result"]["serverInfo"]["name"],
+        "remote-window-bridge"
+    );
     send(
         &mut guard.0,
         json!({"jsonrpc":"2.0","method":"notifications/initialized"}),

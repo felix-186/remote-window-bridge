@@ -58,7 +58,7 @@ impl WindowsPlatform {
                     "Per-Monitor V2 awareness is required",
                 ));
             }
-            let name = wide("Local\\AIRemoteControl.Input.v1");
+            let name = wide("Local\\remote-window-bridge.Input.v1");
             let lock = CreateMutexW(null(), 0, name.as_ptr());
             if lock.is_null() {
                 return Err(native_error(
@@ -69,7 +69,7 @@ impl WindowsPlatform {
             let exists = GetLastError() == ERROR_ALREADY_EXISTS;
             let lock = Handle(lock);
             if exists {
-                return Err(DesktopError::new("LEASE_CONFLICT", "Another AIRemoteControl process owns this Windows session; stop it before starting another Agent"));
+                return Err(DesktopError::new("LEASE_CONFLICT", "Another remote-window-bridge process owns this Windows session; stop it before starting another Agent"));
             }
             let hotkeys = Hotkeys::start(control)?;
             Ok(Self {

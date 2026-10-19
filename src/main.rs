@@ -1,4 +1,4 @@
-use airemotecontrol::{
+use remote_window_bridge::{
     control::Control,
     error::{DesktopError, Result},
     geometry::Rect,
@@ -18,7 +18,7 @@ fn run() -> Result<()> {
     let mut args = std::env::args().skip(1);
     let command = args.next().unwrap_or_else(|| "help".into());
     if matches!(command.as_str(), "help" | "--help" | "-h") {
-        println!("AIRemoteControl {}\n\nCommands:\n  doctor\n  windows\n  capture --window <opaque-id> [--viewport x,y,width,height] [--output preview.png] [--delay-ms 3000]\n  mcp [--transport stdio] [--data-dir <directory>]\n\nWindows host only. Connect the remote client first.\nCtrl+Alt+F10: pause   Ctrl+Alt+F11: resume locally\nNo OCR, background capture, or GUI in v0.1. See README.md.",env!("CARGO_PKG_VERSION"));
+        println!("remote-window-bridge {}\n\nCommands:\n  doctor\n  windows\n  capture --window <opaque-id> [--viewport x,y,width,height] [--output preview.png] [--delay-ms 3000] [--data-dir <directory>]\n  mcp [--transport stdio] [--data-dir <directory>]\n\nWindows host only. Connect the remote client first.\nCtrl+Alt+F10: pause   Ctrl+Alt+F11: resume locally\nNo OCR, background capture, or GUI in v0.1. See README.md.",env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
     let mut options = std::collections::HashMap::new();
@@ -67,10 +67,10 @@ fn run() -> Result<()> {
     let data_dir = options
         .get("--data-dir")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("AIREMOTE_DATA_DIR").map(PathBuf::from))
+        .or_else(|| std::env::var_os("REMOTE_WINDOW_BRIDGE_DATA_DIR").map(PathBuf::from))
         .unwrap_or_else(|| {
             std::env::var_os("LOCALAPPDATA")
-                .map(|dir| PathBuf::from(dir).join("AIRemoteControl").join("data"))
+                .map(|dir| PathBuf::from(dir).join("remote-window-bridge").join("data"))
                 .unwrap_or_else(|| PathBuf::from("data"))
         });
     let mut service = DesktopService::new(native, control, data_dir)?;
