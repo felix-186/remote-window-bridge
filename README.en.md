@@ -4,7 +4,7 @@
 
 A remote desktop control tool written in Rust. Codex, Claude Code, and other MCP agents can observe, click, and type through an **already-connected remote desktop window** on the local machine, such as RDP, ToDesk, or Sunlogin. No AIRemoteControl service needs to be installed on the remote computer.
 
-Current release: **initial Windows CLI and MCP stdio implementation**. The shared core builds and runs tests on macOS and Linux, but native desktop backends for those platforms are not implemented. Development and checks have been performed on macOS, including type-checking the Windows API bindings. Actual remote client behavior still requires the [Windows validation procedure](docs/windows-validation.md) (in Chinese).
+Current release: **initial Windows CLI and MCP stdio implementation**. The shared core builds and runs tests on macOS and Linux, but native desktop backends for those platforms are not implemented. Development and checks have been performed on macOS, including type-checking the Windows API bindings. Actual remote client behavior still requires testing on Windows.
 
 ## Implemented features
 
@@ -109,7 +109,7 @@ The protocol layer implements stdio, initialization, ping, tool discovery and ca
 - `InputBackend`: execute mapped actions and repeat native focus and hit checks before injection.
 - `OcrProvider`: an optional interface for text recognition, confidence scores, and bounding boxes.
 
-The Windows implementation is isolated in [src/platform/windows.rs](src/platform/windows.rs). Shared session, frame, cancellation, audit, coordinate, and MCP logic does not depend on Win32. Future macOS support can use native capture and input APIs; Linux requires separate X11 and Wayland adapters. See the [platform interface guide](docs/platform-interfaces.md) (in Chinese).
+The Windows implementation is isolated in [src/platform/windows.rs](src/platform/windows.rs). Shared session, frame, cancellation, audit, coordinate, and MCP logic does not depend on Win32. Future macOS support can use native capture and input APIs; Linux requires separate X11 and Wayland adapters.
 
 ## Data and limitations
 
@@ -138,7 +138,7 @@ cargo check --locked --features windows-api-check
 
 The last command type-checks native Windows code on a non-Windows development host. **It does not verify Windows linking or real desktop behavior.** The feature is for development, not release builds. CI includes a Windows MSVC build, but its results must be checked after the workflow actually runs.
 
-See the [architecture design](docs/design.md) for the longer-term plan and the [2026-10-18 review](docs/review-2026-10-18.md) for the latest recorded code inspection (both in Chinese). This README and the implementation define the current release's scope.
+This README and the implementation define the current release's scope.
 
 ## License
 

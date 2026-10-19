@@ -4,7 +4,7 @@
 
 Rust 编写的远程桌面控制工具。Codex、Claude Code 或其他 MCP Agent，通过本机已经连接的 RDP / ToDesk / 向日葵窗口观察、点击和输入；远端无需安装本项目服务。
 
-当前版本：**Windows CLI + MCP stdio 初版**。macOS/Linux 可编译和测试公共内核，真实桌面后端尚未实现。当前开发环境为 macOS，Windows API 已进行类型检查，真实远程客户端行为仍需按 [Windows 验收步骤](docs/windows-validation.md) 测试。
+当前版本：**Windows CLI + MCP stdio 初版**。macOS/Linux 可编译和测试公共内核，真实桌面后端尚未实现。当前开发环境为 macOS，Windows API 已进行类型检查，真实远程客户端行为仍需实机测试。
 
 ## 已实现
 
@@ -109,7 +109,7 @@ claude mcp add --transport stdio remote_desktop -- C:\AIRemoteControl\airemoteco
 - `InputBackend`：执行转换后的动作，平台内再次检查焦点和命中。
 - `OcrProvider`：可选文字、置信度和 bbox 识别接口。
 
-Windows 后端独立位于 [src/platform/windows.rs](src/platform/windows.rs)。会话、帧、取消、审计、坐标和 MCP 逻辑不依赖 Win32。后续 macOS 接入系统截图/输入 API；Linux 分别适配 X11、Wayland。见 [平台接口说明](docs/platform-interfaces.md)。
+Windows 后端独立位于 [src/platform/windows.rs](src/platform/windows.rs)。会话、帧、取消、审计、坐标和 MCP 逻辑不依赖 Win32。后续 macOS 接入系统截图/输入 API；Linux 分别适配 X11、Wayland。
 
 ## 数据与限制
 
@@ -138,7 +138,7 @@ cargo check --locked --features windows-api-check
 
 最后一条允许非 Windows 主机类型检查原生代码，**不等于 Windows 链接或实机验收**。该开发特性不用于发布。CI 包含 Windows MSVC 构建，但仍需实际触发后检查结果。
 
-长期架构见 [设计文档](docs/design.md)，本版范围以本 README 和实现为准。最近一次代码检查见 [2026-10-18 检查记录](docs/review-2026-10-18.md)。
+本版范围以本 README 和实现为准。
 
 ## 许可证
 
