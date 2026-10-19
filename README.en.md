@@ -16,7 +16,7 @@ Current release: **0.1.0, initial Windows CLI and MCP stdio implementation**. Th
 - Local pause with `Ctrl+Alt+F10` and resume with `Ctrl+Alt+F11`. Agents cannot clear a user pause.
 - Action deduplication using `action_id`, persistent auditing, and queries for uncertain results after a crash. Actions with side effects are not automatically replayed.
 - One control process per Windows session to prevent agents from competing for input.
-- A Windows DPI manifest and CI build configuration for Windows, macOS, and Linux.
+- A Windows DPI manifest.
 
 The program does not embed a specific model or impose task-specific blocklists for terminals, deletion, or other business operations. Task planning and business confirmations remain with the user and their chosen agent.
 
@@ -188,7 +188,7 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo check --locked --features windows-api-check
 ```
 
-After installing Rust on macOS/Linux, you can run the build and check commands above, `doctor`, and the MCP protocol server. Window enumeration, capture, and input return `PLATFORM_UNSUPPORTED`. The last command type-checks native Windows code on a non-Windows development host. **It does not verify Windows linking or real desktop behavior.** The feature is for development, not release builds. CI includes a Windows MSVC build and uploads the `remote-window-bridge-windows-x64` artifact; check the corresponding workflow run for actual results.
+After installing Rust on macOS/Linux, you can run the build and check commands above, `doctor`, and the MCP protocol server. Window enumeration, capture, and input return `PLATFORM_UNSUPPORTED`. The last command type-checks native Windows code on a non-Windows development host. **It does not verify Windows linking or real desktop behavior.** The feature is for development, not release builds.
 
 This README and the implementation define the current release's scope.
 

@@ -16,7 +16,7 @@ Rust 编写的远程桌面控制工具。Codex、Claude Code 或其他 MCP Agent
 - `Ctrl+Alt+F10` 人工暂停、`Ctrl+Alt+F11` 本机恢复；Agent 不能解除人工暂停。
 - action_id 去重、持久化动作审计、崩溃后未知结果查询，不自动补发副作用动作。
 - 同一 Windows 会话只允许一个控制进程，避免不同 Agent 同时抢键鼠。
-- Windows DPI manifest，以及 Windows/macOS/Linux CI 构建配置。
+- Windows DPI manifest。
 
 不内置特定模型，不设置终端、删除等业务黑名单。任务规划和业务确认由用户与所选 Agent 决定。
 
@@ -188,7 +188,7 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo check --locked --features windows-api-check
 ```
 
-macOS/Linux 安装 Rust 后可运行上述构建和检查命令，以及 `doctor` 和 MCP 协议服务；窗口枚举、截图和输入会返回 `PLATFORM_UNSUPPORTED`。最后一条允许非 Windows 主机类型检查原生代码，**不等于 Windows 链接或实机验收**。该开发特性不用于发布。CI 包含 Windows MSVC 构建，并上传 `remote-window-bridge-windows-x64` 产物；实际结果以对应 workflow 运行为准。
+macOS/Linux 安装 Rust 后可运行上述构建和检查命令，以及 `doctor` 和 MCP 协议服务；窗口枚举、截图和输入会返回 `PLATFORM_UNSUPPORTED`。最后一条允许非 Windows 主机类型检查原生代码，**不等于 Windows 链接或实机验收**。该开发特性不用于发布。
 
 本版范围以本 README 和实现为准。
 
