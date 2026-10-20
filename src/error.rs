@@ -8,6 +8,8 @@ pub struct DesktopError {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sent_events: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<serde_json::Value>,
 }
 
 impl DesktopError {
@@ -16,6 +18,7 @@ impl DesktopError {
             code: code.into(),
             message: message.into(),
             sent_events: None,
+            details: None,
         }
     }
     pub fn invalid(message: impl Into<String>) -> Self {
@@ -23,6 +26,10 @@ impl DesktopError {
     }
     pub fn with_sent(mut self, sent: u32) -> Self {
         self.sent_events = Some(sent);
+        self
+    }
+    pub fn with_details(mut self, details: serde_json::Value) -> Self {
+        self.details = Some(details);
         self
     }
 }

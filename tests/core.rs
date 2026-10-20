@@ -44,9 +44,19 @@ struct State {
     injections: u32,
     failure: Option<DesktopError>,
     capture_failure: bool,
+    focus_failures: u32,
+    focus_attempts: u32,
+    foreground: bool,
+    lose_foreground_after_capture: bool,
+    last_text_input_mode: Option<TextInputMode>,
+    capture_foreground_failures: u32,
+    activation_batches: u32,
 }
 struct Fake(Arc<Mutex<State>>);
 impl WindowBackend for Fake {
+    fn begin_activation(&self) {
+        self.0.lock().unwrap().activation_batches += 1;
+    }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             platform: "test".into(),
@@ -75,27 +85,67 @@ impl WindowBackend for Fake {
     }
     fn focus(&self, _: &WindowIdentity, cancel: &Cancellation) -> Result<()> {
         cancel.check()?;
+        let mut state = self.0.lock().unwrap();
+        state.focus_attempts += 1;
+        if state.focus_failures > 0 {
+            state.focus_failures -= 1;
+            return Err(DesktopError::new(
+                "FOREGROUND_REQUIRED",
+                "test foreground refusal",
+            ));
+        }
+        state.foreground = true;
         Ok(())
+    }
+    fn prepare_observation(
+        &self,
+        identity: &WindowIdentity,
+        cancel: &Cancellation,
+    ) -> Result<bool> {
+        if self.0.lock().unwrap().foreground {
+            return Ok(false);
+        }
+        cancel.check_running()?;
+        self.focus(identity, cancel)?;
+        Ok(true)
     }
 }
 impl CaptureBackend for Fake {
     fn capture(&self, _: &WindowSnapshot, cancel: &Cancellation) -> Result<RgbImage> {
         cancel.check()?;
-        let state = self.0.lock().unwrap();
+        let mut state = self.0.lock().unwrap();
+        if !state.foreground {
+            return Err(DesktopError::new(
+                "FOREGROUND_REQUIRED",
+                "test lost foreground",
+            ));
+        }
+        if state.capture_foreground_failures > 0 {
+            state.capture_foreground_failures -= 1;
+            state.foreground = false;
+            return Err(DesktopError::new(
+                "FOREGROUND_REQUIRED",
+                "test activation lost before capture",
+            ));
+        }
         if state.capture_failure {
             return Err(DesktopError::new(
                 "CAPTURE_UNAVAILABLE",
                 "test capture failure",
             ));
         }
-        Ok(state.image.clone())
+        let image = state.image.clone();
+        if state.lose_foreground_after_capture {
+            state.foreground = false;
+        }
+        Ok(image)
     }
 }
 impl InputBackend for Fake {
     fn inject(
         &self,
         _: &WindowSnapshot,
-        _: &ResolvedAction,
+        action: &ResolvedAction,
         cancel: &Cancellation,
     ) -> Result<InjectionReport> {
         cancel.check()?;
@@ -104,6 +154,11 @@ impl InputBackend for Fake {
             return Err(e);
         }
         state.injections += 1;
+        if let ResolvedAction::TypeText { input_mode, .. }
+        | ResolvedAction::Fill { input_mode, .. } = action
+        {
+            state.last_text_input_mode = Some(*input_mode);
+        }
         Ok(InjectionReport { sent_events: 3 })
     }
 }
@@ -117,6 +172,8 @@ impl Fixture {
         let temp = Temp::new();
         let state = Arc::new(Mutex::new(State {
             snapshot: WindowSnapshot {
+                activation: None,
+                input_surface: None,
                 identity: WindowIdentity {
                     id: WindowId("test:1".into()),
                     process_id: 4,
@@ -145,6 +202,13 @@ impl Fixture {
             injections: 0,
             failure: None,
             capture_failure: false,
+            focus_failures: 0,
+            focus_attempts: 0,
+            foreground: true,
+            lose_foreground_after_capture: false,
+            last_text_input_mode: None,
+            capture_foreground_failures: 0,
+            activation_batches: 0,
         }));
         let mut service = DesktopService::new(
             Box::new(Fake(state.clone())),
@@ -176,6 +240,633 @@ impl Fixture {
             },
         }
     }
+}
+
+#[test]
+fn wait_does_not_keep_reclaiming_foreground_after_the_first_observation() {
+    let mut f = Fixture::new();
+    {
+        let mut state = f.state.lock().unwrap();
+        state.foreground = false;
+        state.lose_foreground_after_capture = true;
+    }
+    assert_eq!(
+        f.service.wait("stable", 1000).unwrap_err().code,
+        "FOREGROUND_REQUIRED"
+    );
+    assert_eq!(f.state.lock().unwrap().focus_attempts, 1);
+    assert!(!f.state.lock().unwrap().foreground);
+    assert!(f.service.frame.is_none());
+}
+
+#[test]
+fn wait_publishes_only_one_frame_for_all_intermediate_samples() {
+    let mut f = Fixture::new();
+    let result = f.service.wait("stable", 1500).unwrap();
+    assert_eq!(result["condition_met"], true);
+    assert_eq!(
+        std::fs::read_dir(f._temp.0.join("frames")).unwrap().count(),
+        1
+    );
+    assert!(f
+        .service
+        .frame
+        .as_ref()
+        .unwrap()
+        .metadata
+        .image_path
+        .is_file());
+}
+
+#[test]
+fn small_target_change_cannot_hide_inside_a_large_viewport() {
+    let mut f = Fixture::new();
+    {
+        let mut state = f.state.lock().unwrap();
+        state.snapshot.client_screen.width = 960;
+        state.snapshot.client_screen.height = 600;
+        state.snapshot.content_screen = state.snapshot.client_screen;
+        state.image = RgbImage {
+            width: 960,
+            height: 600,
+            pixels: vec![100; 960 * 600 * 3],
+        };
+    }
+    let mut request = f.click("changed-target");
+    if let Action::Click { point, .. } = &mut request.action {
+        point.x = 480.0;
+        point.y = 300.0;
+    }
+    {
+        let mut state = f.state.lock().unwrap();
+        for y in 290..310 {
+            for x in 470..490 {
+                let offset = (y * 960 + x) * 3;
+                state.image.pixels[offset..offset + 3].fill(240);
+            }
+        }
+    }
+    assert_eq!(f.service.perform(request).unwrap_err().code, "STALE_FRAME");
+    assert_eq!(f.state.lock().unwrap().injections, 0);
+}
+
+#[test]
+fn stage_timings_include_sampling_and_only_one_publication() {
+    let mut f = Fixture::new();
+    f.service.performance.begin("test_wait", 12);
+    f.service.wait("stable", 1500).unwrap();
+    f.service.performance.finish();
+    let report = f.service.performance.snapshot();
+    let report = &report["recent"][0];
+    assert_eq!(report["stages_us"]["queue"], 12);
+    assert!(report["calls"]["capture"].as_u64().unwrap() >= 4);
+    assert_eq!(report["calls"]["encode_png"], 1);
+    assert_eq!(report["calls"]["frame_write"], 1);
+    for _ in 0..40 {
+        f.service.performance.begin("bounded", 0);
+        f.service.performance.finish();
+    }
+    assert_eq!(
+        f.service.performance.snapshot()["recent"]
+            .as_array()
+            .unwrap()
+            .len(),
+        32
+    );
+}
+
+#[test]
+fn screenshot_retention_keeps_current_and_unrelated_files() {
+    use remote_window_bridge::storage::FrameStore;
+    let temp = Temp::new();
+    let mut store = FrameStore::new(temp.0.join("frames")).unwrap();
+    store.retention.max_files = 2;
+    store.retention.grace_secs = 0;
+    let keep = store.path("frame-1-1-5");
+    for n in 1..=5 {
+        std::fs::write(store.path(&format!("frame-1-1-{n}")), [1; 10]).unwrap();
+    }
+    let foreign = temp.0.join("frames/user-image.png");
+    std::fs::write(&foreign, [2; 10]).unwrap();
+    store.prune(&keep).unwrap();
+    assert!(keep.is_file());
+    assert!(foreign.is_file());
+    assert_eq!(std::fs::read_dir(temp.0.join("frames")).unwrap().count(), 3);
+    // Grace prevents quota cleanup from removing screenshots still in use.
+    store.retention.grace_secs = 120;
+    store.retention.max_files = 0;
+    store.prune(&keep).unwrap();
+    assert_eq!(std::fs::read_dir(temp.0.join("frames")).unwrap().count(), 3);
+    store.retention.grace_secs = 0;
+    store.retention.max_files = 100;
+    store.retention.max_bytes = 15;
+    store.prune(&keep).unwrap();
+    assert_eq!(std::fs::read_dir(temp.0.join("frames")).unwrap().count(), 2);
+    let aged = store.path("frame-1-1-6");
+    std::fs::write(&aged, [3; 10]).unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&aged)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1))
+        .unwrap();
+    store.retention.max_bytes = 1000;
+    store.prune(&keep).unwrap();
+    assert!(!aged.exists());
+    assert!(keep.is_file());
+    assert!(foreign.is_file());
+}
+
+#[test]
+fn segmented_audit_preserves_evicted_actions_conflicts_and_uncertainty() {
+    let temp = Temp::new();
+    let path = temp.0.join("audit.jsonl");
+    let request = |n: usize| ActionRequest {
+        action_id: format!("archive-{n}"),
+        session_id: "s".into(),
+        frame_id: "f".into(),
+        action: Action::PressKey {
+            keys: vec!["Enter".into()],
+        },
+    };
+    {
+        let mut audit = Audit::open_with_segment_limit(&path, 4096).unwrap();
+        for n in 0..520 {
+            audit.intent(&request(n)).unwrap();
+            if n == 0 {
+                let mut receipt = audit.get("archive-0").unwrap();
+                receipt.execution_status = "injected".into();
+                receipt.sent_events = 2;
+                receipt.error = None;
+                audit.outcome(&receipt).unwrap();
+            }
+        }
+        assert_eq!(audit.status()["cached_actions"], 512);
+        assert_eq!(
+            audit.lookup(&request(0)).unwrap().unwrap().execution_status,
+            "injected"
+        );
+        assert_eq!(
+            audit.get("archive-1").unwrap().execution_status,
+            "uncertain"
+        );
+        let mut conflict = request(0);
+        conflict.frame_id = "different".into();
+        assert_eq!(
+            audit.lookup(&conflict).unwrap_err().code,
+            "ACTION_ID_CONFLICT"
+        );
+        // Updating an evicted intent must still find its fingerprint on disk.
+        let mut receipt = audit.get("archive-1").unwrap();
+        receipt.sent_events = 1;
+        audit.outcome(&receipt).unwrap();
+    }
+    let audit = Audit::open(&path).unwrap();
+    assert_eq!(audit.get("archive-0").unwrap().execution_status, "injected");
+    assert_eq!(audit.get("archive-1").unwrap().sent_events, 1);
+    assert_eq!(
+        audit.get("archive-2").unwrap().execution_status,
+        "uncertain"
+    );
+    assert!(audit.lookup(&request(999)).unwrap().is_none());
+    drop(audit);
+    let first = temp
+        .0
+        .join("audit.jsonl.segment-00000000000000000001.jsonl");
+    std::fs::remove_file(first).unwrap();
+    assert_eq!(Audit::open(&path).err().unwrap().code, "AUDIT_CORRUPT");
+}
+
+#[test]
+fn truncated_archived_audit_blocks_recovery_too() {
+    use std::io::Write;
+    let temp = Temp::new();
+    let path = temp.0.join("audit.jsonl");
+    {
+        let mut audit = Audit::open_with_segment_limit(&path, 1).unwrap();
+        for n in 0..2 {
+            audit
+                .intent(&ActionRequest {
+                    session_id: "s".into(),
+                    frame_id: "f".into(),
+                    action_id: format!("a-{n}"),
+                    action: Action::PressKey {
+                        keys: vec!["Enter".into()],
+                    },
+                })
+                .unwrap();
+        }
+    }
+    let archive = temp
+        .0
+        .join("audit.jsonl.segment-00000000000000000001.jsonl");
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(archive)
+        .unwrap()
+        .write_all(b"{")
+        .unwrap();
+    assert_eq!(Audit::open(&path).err().unwrap().code, "AUDIT_CORRUPT");
+}
+
+#[test]
+fn relative_audit_path_reopens_its_archived_segments() {
+    let relative = PathBuf::from("target").join(format!(
+        "audit-relative-{}-{}",
+        std::process::id(),
+        SEQUENCE.fetch_add(1, Ordering::SeqCst)
+    ));
+    let directory = std::env::current_dir().unwrap().join(&relative);
+    std::fs::create_dir_all(&directory).unwrap();
+    let _cleanup = Temp(directory);
+    let path = relative.join("audit.jsonl");
+    {
+        let mut audit = Audit::open_with_segment_limit(&path, 1).unwrap();
+        for n in 0..2 {
+            audit
+                .intent(&ActionRequest {
+                    session_id: "s".into(),
+                    frame_id: "f".into(),
+                    action_id: format!("relative-{n}"),
+                    action: Action::PressKey {
+                        keys: vec!["Enter".into()],
+                    },
+                })
+                .unwrap();
+        }
+    }
+    let audit = Audit::open(&path).unwrap();
+    assert_eq!(
+        audit.get("relative-0").unwrap().execution_status,
+        "uncertain"
+    );
+}
+
+#[test]
+fn after_image_failure_does_not_reclaim_foreground_or_repeat_the_action() {
+    let mut f = Fixture::new();
+    let request = f.click("post-capture-passive");
+    // Lose foreground after the preflight image; the fake injector reports an
+    // accepted action, but the after-image must remain passive and fail.
+    f.state.lock().unwrap().lose_foreground_after_capture = true;
+    let receipt = f.service.perform(request.clone()).unwrap();
+    assert_eq!(receipt.execution_status, "injected");
+    assert_eq!(receipt.error.unwrap().code, "POST_CAPTURE_FAILED");
+    assert!(receipt.next_frame_id.is_none());
+    assert_eq!(f.state.lock().unwrap().focus_attempts, 0);
+    assert_eq!(f.state.lock().unwrap().injections, 1);
+    assert!(f.service.frame.is_none());
+    f.service.perform(request).unwrap();
+    assert_eq!(f.state.lock().unwrap().injections, 1);
+}
+
+#[test]
+fn observation_recovers_foreground_and_requires_a_new_content_click_for_typing() {
+    let mut f = Fixture::new();
+    let click = f.click("content-click");
+    f.service.perform(click).unwrap();
+    f.state.lock().unwrap().foreground = false;
+    let frame = f.service.observe().unwrap();
+    assert_eq!(f.state.lock().unwrap().focus_attempts, 1);
+    assert!(f.state.lock().unwrap().foreground);
+    let request = ActionRequest {
+        session_id: frame.session_id,
+        frame_id: frame.frame_id,
+        action_id: "text-after-recovery".into(),
+        action: Action::TypeText {
+            text: "ls".into(),
+            sensitive: false,
+            input_mode: TextInputMode::ScanCode,
+        },
+    };
+    assert_eq!(
+        f.service.perform(request).unwrap_err().code,
+        "CONTENT_FOCUS_REQUIRED"
+    );
+    assert_eq!(f.state.lock().unwrap().injections, 1);
+}
+
+#[test]
+fn paused_observation_does_not_reclaim_foreground_but_can_capture_the_active_target() {
+    let mut f = Fixture::new();
+    f.service.control.pause_user();
+    assert!(f.service.observe().is_ok());
+    f.state.lock().unwrap().foreground = false;
+    assert_eq!(f.service.observe().unwrap_err().code, "PAUSED");
+    assert_eq!(f.state.lock().unwrap().focus_attempts, 0);
+    assert!(!f.state.lock().unwrap().foreground);
+}
+
+#[test]
+fn lost_foreground_during_input_preflight_does_not_activate_or_inject() {
+    let mut f = Fixture::new();
+    let request = f.click("do-not-reclaim-mid-input");
+    f.state.lock().unwrap().foreground = false;
+    assert_eq!(
+        f.service.perform(request).unwrap_err().code,
+        "FOREGROUND_REQUIRED"
+    );
+    assert_eq!(f.state.lock().unwrap().focus_attempts, 0);
+    assert_eq!(f.state.lock().unwrap().injections, 0);
+}
+
+#[test]
+fn composite_fill_and_key_at_recover_focus_and_deduplicate_as_single_actions() {
+    let mut f = Fixture::new();
+    let frame = f.service.observe().unwrap();
+    f.state.lock().unwrap().foreground = false;
+    let args = json!({"session_id":frame.session_id,"frame_id":frame.frame_id,
+        "action_id":"fill-command","x":10,"y":10,"text":"hostname -I","settle_ms":0});
+    let (fill, image) = mcp::call(&mut f.service, "desktop_fill", args.clone()).unwrap();
+    assert!(image);
+    assert_eq!(fill["execution_status"], "injected");
+    assert_eq!(fill["text_input_mode"], "scan_code");
+    mcp::call(&mut f.service, "desktop_fill", args).unwrap();
+    assert_eq!(f.state.lock().unwrap().focus_attempts, 1);
+    assert_eq!(f.state.lock().unwrap().injections, 1);
+    f.state.lock().unwrap().foreground = false;
+    let key = json!({"session_id":frame.session_id,"frame_id":fill["next_frame_id"],
+        "action_id":"execute-command","x":10,"y":10,"keys":["Enter"],"settle_ms":0});
+    let (receipt, _) = mcp::call(&mut f.service, "desktop_key_at", key.clone()).unwrap();
+    assert_eq!(receipt["execution_status"], "injected");
+    mcp::call(&mut f.service, "desktop_key_at", key).unwrap();
+    assert_eq!(f.state.lock().unwrap().focus_attempts, 2);
+    assert_eq!(f.state.lock().unwrap().injections, 2);
+    let log = std::fs::read_to_string(f._temp.0.join("audit.jsonl")).unwrap();
+    assert_eq!(
+        log.lines()
+            .filter(|line| serde_json::from_str::<Value>(line).unwrap()["event"] == "intent")
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn composite_actions_reject_stale_scenes_and_control_text_before_injection() {
+    let mut f = Fixture::new();
+    let frame = f.service.observe().unwrap();
+    let args = json!({"session_id":frame.session_id,"frame_id":frame.frame_id,"action_id":"invalid",
+        "x":10,"y":10,"text":"hostname -I\n","settle_ms":0});
+    assert!(mcp::call(&mut f.service, "desktop_fill", args).is_err());
+    assert_eq!(f.state.lock().unwrap().injections, 0);
+    assert_eq!(f.state.lock().unwrap().focus_attempts, 0);
+    let frame = f.service.observe().unwrap();
+    let args = json!({"session_id":frame.session_id,"frame_id":frame.frame_id,"action_id":"stale",
+        "x":10,"y":10,"keys":["Enter"],"settle_ms":0});
+    f.state.lock().unwrap().image.pixels.fill(0);
+    assert_eq!(
+        mcp::call(&mut f.service, "desktop_key_at", args)
+            .unwrap_err()
+            .code,
+        "STALE_FRAME"
+    );
+    assert_eq!(f.state.lock().unwrap().injections, 0);
+}
+
+#[test]
+fn partial_composite_input_pauses_and_sensitive_fill_is_redacted() {
+    let mut f = Fixture::new();
+    let frame = f.service.observe().unwrap();
+    let args = json!({"session_id":frame.session_id,"frame_id":frame.frame_id,"action_id":"partial-fill",
+        "x":10,"y":10,"text":"COMPOSITE_SECRET","sensitive":true,"settle_ms":0});
+    f.state.lock().unwrap().failure = Some(
+        DesktopError::new("INPUT_PARTIAL", "test click accepted before text failure").with_sent(4),
+    );
+    let (receipt, image) = mcp::call(&mut f.service, "desktop_fill", args.clone()).unwrap();
+    assert!(!image);
+    assert_eq!(receipt["execution_status"], "uncertain");
+    assert_eq!(receipt["sent_events"], 4);
+    assert_eq!(f.service.control.reason(), "agent");
+    mcp::call(&mut f.service, "desktop_fill", args).unwrap();
+    assert_eq!(f.state.lock().unwrap().focus_attempts, 1);
+    assert!(!std::fs::read_to_string(f._temp.0.join("audit.jsonl"))
+        .unwrap()
+        .contains("COMPOSITE_SECRET"));
+}
+
+#[test]
+fn changing_a_bound_surface_mapping_rejects_old_frame_input() {
+    let mut f = Fixture::new();
+    let request = f.click("old-surface");
+    let mut state = f.state.lock().unwrap();
+    let mut replacement = state.snapshot.identity.clone();
+    replacement.id = WindowId("test:replacement".into());
+    state.snapshot.input_surface = Some(replacement);
+    drop(state);
+    assert_eq!(
+        f.service.perform(request).unwrap_err().code,
+        "GEOMETRY_CHANGED"
+    );
+    assert_eq!(f.state.lock().unwrap().injections, 0);
+}
+
+#[test]
+fn focus_wait_can_be_paused_after_activation_but_before_a_successful_capture() {
+    let mut f = Fixture::new();
+    f.state.lock().unwrap().capture_foreground_failures = u32::MAX;
+    let control = f.service.control.clone();
+    let worker = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(75));
+        control.pause_user();
+    });
+    assert_eq!(
+        f.service.focus_with_timeout(60_000).unwrap_err().code,
+        "PAUSED"
+    );
+    worker.join().unwrap();
+    assert!(f.service.frame.is_none());
+}
+
+#[test]
+fn focus_wait_retries_capture_failures_with_one_activation_batch() {
+    let mut f = Fixture::new();
+    f.service.observe().unwrap();
+    let batches = f.state.lock().unwrap().activation_batches;
+    f.state.lock().unwrap().capture_foreground_failures = 2;
+    let frame = f.service.focus_with_timeout(1000).unwrap();
+    assert!(frame.image_path.is_file());
+    let state = f.state.lock().unwrap();
+    assert_eq!(state.focus_attempts, 3);
+    assert_eq!(state.activation_batches, batches + 1);
+    drop(state);
+    f.service.focus().unwrap();
+    assert_eq!(f.state.lock().unwrap().activation_batches, batches + 2);
+}
+
+#[test]
+fn focus_capture_failure_obeys_timeout_and_keeps_old_frames_invalid() {
+    let mut f = Fixture::new();
+    f.service.observe().unwrap();
+    f.state.lock().unwrap().capture_foreground_failures = u32::MAX;
+    let start = std::time::Instant::now();
+    assert_eq!(
+        f.service.focus_with_timeout(100).unwrap_err().code,
+        "FOREGROUND_REQUIRED"
+    );
+    assert!(start.elapsed() >= Duration::from_millis(100));
+    assert!(start.elapsed() < Duration::from_secs(2));
+    assert!(f.service.frame.is_none());
+    let attempts = f.state.lock().unwrap().focus_attempts;
+    assert!(attempts >= 2);
+    assert_eq!(f.service.focus().unwrap_err().code, "FOREGROUND_REQUIRED");
+    assert_eq!(f.state.lock().unwrap().focus_attempts, attempts + 1);
+}
+
+#[test]
+fn focus_wait_recovers_after_refusal_and_returns_a_new_image_file() {
+    let mut f = Fixture::new();
+    let old = f.service.observe().unwrap();
+    f.state.lock().unwrap().focus_failures = 1;
+    let frame = f.service.focus_with_timeout(1000).unwrap();
+    assert_ne!(frame.frame_id, old.frame_id);
+    assert_eq!(f.state.lock().unwrap().focus_attempts, 2);
+    assert!(frame.image_path.is_absolute());
+    assert_eq!(
+        std::fs::read(&frame.image_path).unwrap(),
+        f.service.frame.as_ref().unwrap().png
+    );
+}
+
+#[test]
+fn focus_refusal_discards_old_frame_and_wait_can_be_cancelled() {
+    let mut f = Fixture::new();
+    f.service.observe().unwrap();
+    f.state.lock().unwrap().focus_failures = u32::MAX;
+    assert_eq!(f.service.focus().unwrap_err().code, "FOREGROUND_REQUIRED");
+    assert!(f.service.frame.is_none());
+    assert_eq!(f.state.lock().unwrap().focus_attempts, 1);
+    let control = f.service.control.clone();
+    let worker = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(75));
+        control.pause_user();
+    });
+    let start = std::time::Instant::now();
+    assert_eq!(
+        f.service.focus_with_timeout(60_000).unwrap_err().code,
+        "PAUSED"
+    );
+    worker.join().unwrap();
+    assert!(start.elapsed() < Duration::from_secs(2));
+    assert!(f.service.focus_with_timeout(60_001).is_err());
+}
+
+#[test]
+fn text_mode_preserves_legacy_audit_fingerprints_and_detects_mode_conflicts() {
+    let legacy = json!({"session_id":"s","frame_id":"f","action_id":"text",
+        "action":{"kind":"type_text","text":"ls","sensitive":false}});
+    let request: ActionRequest = serde_json::from_value(legacy.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&request).unwrap(), legacy);
+    let temp = Temp::new();
+    let path = temp.0.join("audit.jsonl");
+    {
+        let mut audit = Audit::open(&path).unwrap();
+        audit.intent(&request).unwrap();
+    }
+    let audit = Audit::open(&path).unwrap();
+    assert!(audit.lookup(&request).unwrap().is_some());
+    let mut scan = legacy;
+    scan["action"]["input_mode"] = json!("scan_code");
+    let scan: ActionRequest = serde_json::from_value(scan).unwrap();
+    assert_eq!(audit.lookup(&scan).unwrap_err().code, "ACTION_ID_CONFLICT");
+}
+
+#[test]
+fn mcp_default_text_mode_uses_scancodes_for_ascii_and_reports_the_selected_channel() {
+    for (text, mode, expected) in [
+        ("dir /b", None, TextInputMode::ScanCode),
+        (
+            "echo %USERNAME% & cd",
+            Some("auto"),
+            TextInputMode::ScanCode,
+        ),
+        ("中文", None, TextInputMode::Unicode),
+        ("echo 中文", None, TextInputMode::Unicode),
+        ("ls\n", None, TextInputMode::Unicode),
+        ("dir", Some("unicode"), TextInputMode::Unicode),
+        ("dir", Some("scan_code"), TextInputMode::ScanCode),
+    ] {
+        let mut f = Fixture::new();
+        assert_eq!(
+            f.service.status()["server"]["default_text_input_mode"],
+            "auto"
+        );
+        let click = f.click("content");
+        let receipt = f.service.perform(click).unwrap();
+        let mut args = json!({"session_id":f.service.status()["session_id"],
+            "frame_id":receipt.next_frame_id.unwrap(),"action_id":"type-command","text":text});
+        if let Some(mode) = mode {
+            args["input_mode"] = json!(mode);
+        }
+        let (data, _) = mcp::call(&mut f.service, "desktop_type_text", args.clone()).unwrap();
+        assert_eq!(f.state.lock().unwrap().last_text_input_mode, Some(expected));
+        assert_eq!(
+            data["text_input_mode"],
+            serde_json::to_value(expected).unwrap()
+        );
+        let audit = Audit::open(&f._temp.0.join("audit.jsonl")).unwrap();
+        assert_eq!(
+            audit.get("type-command").unwrap().text_input_mode,
+            Some(expected)
+        );
+        mcp::call(&mut f.service, "desktop_type_text", args).unwrap();
+        assert_eq!(f.state.lock().unwrap().injections, 2);
+    }
+    let definition = mcp::tools()
+        .into_iter()
+        .find(|tool| tool["name"] == "desktop_type_text")
+        .unwrap();
+    assert_eq!(
+        definition["inputSchema"]["properties"]["input_mode"]["default"],
+        "auto"
+    );
+}
+
+#[test]
+fn old_action_receipts_without_text_mode_remain_readable() {
+    let legacy = json!({"action_id":"old","execution_status":"injected",
+        "verification_status":"unverified","sent_events":12,"next_frame_id":null,"error":null});
+    let receipt: ActionReceipt = serde_json::from_value(legacy.clone()).unwrap();
+    assert_eq!(receipt.text_input_mode, None);
+    assert_eq!(serde_json::to_value(receipt).unwrap(), legacy);
+}
+
+#[test]
+fn mcp_routes_focus_timeout_and_scan_code_mode_and_rejects_unknown_modes() {
+    let mut f = Fixture::new();
+    let session = f.service.status()["session_id"].clone();
+    f.state.lock().unwrap().focus_failures = 1;
+    let (data, image) = mcp::call(
+        &mut f.service,
+        "desktop_focus",
+        json!({"session_id":session,"timeout_ms":1000}),
+    )
+    .unwrap();
+    assert!(image);
+    assert!(data["frame"]["image_path"].is_string());
+    assert_eq!(f.state.lock().unwrap().focus_attempts, 2);
+    let click = f.click("focus-content");
+    let receipt = f.service.perform(click).unwrap();
+    let args = json!({"session_id":session,"frame_id":receipt.next_frame_id.unwrap(),
+        "action_id":"scan-text","text":"ls","input_mode":"scan_code"});
+    let (receipt, image) = mcp::call(&mut f.service, "desktop_type_text", args.clone()).unwrap();
+    assert!(image);
+    assert_eq!(receipt["execution_status"], "injected");
+    let records = std::fs::read_to_string(f._temp.0.join("audit.jsonl")).unwrap();
+    let intent: Value = records
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .find(|event| event["action_id"] == "scan-text")
+        .unwrap();
+    assert_eq!(intent["request"]["action"]["input_mode"], "scan_code");
+    let mut invalid = args;
+    invalid["input_mode"] = json!("clipboard");
+    assert!(mcp::call(&mut f.service, "desktop_type_text", invalid).is_err());
+    assert!(mcp::call(
+        &mut f.service,
+        "desktop_focus",
+        json!({"session_id":session,"timeout_ms":60001})
+    )
+    .is_err());
 }
 
 #[test]
@@ -231,6 +922,7 @@ fn audit_cannot_append_an_outcome_without_intent() {
         action_id: "missing".into(),
         execution_status: "injected".into(),
         verification_status: "unverified".into(),
+        text_input_mode: None,
         sent_events: 1,
         next_frame_id: None,
         error: None,
@@ -266,6 +958,7 @@ fn duplicate_audit_intents_are_not_allowed_to_replace_prior_state() {
         action: Action::TypeText {
             text: "hello".into(),
             sensitive: false,
+            input_mode: TextInputMode::Unicode,
         },
     };
     let mut audit = Audit::open(&path).unwrap();
@@ -497,6 +1190,7 @@ fn resumed_keyboard_requires_a_new_remote_content_click() {
         action: Action::TypeText {
             text: "hello".into(),
             sensitive: false,
+            input_mode: TextInputMode::Unicode,
         },
     };
     assert_eq!(
@@ -529,6 +1223,7 @@ fn audit_recovers_unfinished_intent_without_replaying_and_redacts_text() {
         action: Action::TypeText {
             text: "TOP_SECRET_TEXT".into(),
             sensitive: true,
+            input_mode: TextInputMode::Unicode,
         },
     };
     {

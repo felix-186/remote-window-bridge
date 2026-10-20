@@ -1,6 +1,7 @@
 /target/
 /data/
 /.local-data/
+/.codex/config.toml
 *.log
 .DS_Store
 

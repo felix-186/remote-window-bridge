@@ -99,6 +99,17 @@ pub struct Cancellation {
     request_cancel: Option<Arc<AtomicBool>>,
 }
 impl Cancellation {
+    /// Observation may run while paused, but must not activate windows or send keys.
+    pub fn check_running(&self) -> Result<()> {
+        self.check()?;
+        if self.control.reason() != "running" {
+            return Err(DesktopError::new(
+                "PAUSED",
+                "Window activation is disabled while paused",
+            ));
+        }
+        Ok(())
+    }
     pub fn generation(&self) -> u64 {
         self.generation
     }

@@ -22,6 +22,8 @@ pub struct WindowInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WindowSnapshot {
     pub identity: WindowIdentity,
+    pub activation: Option<WindowIdentity>,
+    pub input_surface: Option<WindowIdentity>,
     pub client_screen: Rect,
     pub content_screen: Rect,
     pub dpi: u32,
@@ -67,6 +69,28 @@ pub struct FrameMetadata {
     pub captured_at_ms: u64,
     pub transform: ImageTransform,
     pub capture_backend: String,
+    pub image_path: std::path::PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextInputMode {
+    Auto,
+    #[default]
+    Unicode,
+    ScanCode,
+}
+impl TextInputMode {
+    fn is_unicode(&self) -> bool {
+        *self == Self::Unicode
+    }
+    pub fn resolved(self, text: &str) -> Self {
+        match self {
+            Self::Auto if text.bytes().all(|byte| (b' '..=b'~').contains(&byte)) => Self::ScanCode,
+            Self::Auto => Self::Unicode,
+            mode => mode,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -99,6 +123,22 @@ pub enum Action {
         text: String,
         #[serde(default)]
         sensitive: bool,
+        // Preserve fingerprints of existing Unicode actions in the audit log.
+        #[serde(default, skip_serializing_if = "TextInputMode::is_unicode")]
+        input_mode: TextInputMode,
+    },
+    Fill {
+        point: Point,
+        text: String,
+        #[serde(default)]
+        sensitive: bool,
+        input_mode: TextInputMode,
+        settle_ms: u64,
+    },
+    KeyAt {
+        point: Point,
+        keys: Vec<String>,
+        settle_ms: u64,
     },
     PressKey {
         keys: Vec<String>,
@@ -125,6 +165,16 @@ pub enum ResolvedAction {
     },
     TypeText {
         text: String,
+        input_mode: TextInputMode,
+    },
+    Fill {
+        point: ScreenPoint,
+        text: String,
+        input_mode: TextInputMode,
+    },
+    KeyAt {
+        point: ScreenPoint,
+        keys: Vec<String>,
     },
     PressKey {
         keys: Vec<String>,
@@ -145,6 +195,8 @@ pub struct ActionReceipt {
     pub action_id: String,
     pub execution_status: String,
     pub verification_status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_input_mode: Option<TextInputMode>,
     pub sent_events: u32,
     pub next_frame_id: Option<String>,
     pub error: Option<crate::error::DesktopError>,

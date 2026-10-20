@@ -2,8 +2,14 @@
 use crate::error::DesktopError;
 use crate::{control::Cancellation, error::Result, geometry::Rect, image::RgbImage, types::*};
 
+pub mod clients;
 #[cfg(any(windows, feature = "windows-api-check"))]
 pub mod windows;
+
+#[cfg(any(windows, feature = "windows-api-check", test))]
+mod keyboard;
+#[cfg(any(windows, feature = "windows-api-check", test))]
+mod surfaces;
 
 /// The OS adapter owns permission prompts and native handles, not the Agent or core.
 pub trait WindowBackend {
@@ -23,9 +29,35 @@ pub trait WindowBackend {
     fn list_windows(&self) -> Result<Vec<WindowInfo>>;
     fn inspect(&self, id: &WindowId, viewport: Option<Rect>) -> Result<WindowSnapshot>;
     fn focus(&self, identity: &WindowIdentity, cancel: &Cancellation) -> Result<()>;
+    /// Reset activation fallbacks once per explicit request, not once per retry.
+    fn begin_activation(&self) {}
+    fn diagnostics(&self, _id: Option<&WindowId>) -> Result<serde_json::Value> {
+        Ok(serde_json::json!({}))
+    }
+    /// Restore the explicitly bound window before a new observation. Return true
+    /// if activation was needed so the core can invalidate keyboard authorization.
+    fn prepare_observation(
+        &self,
+        _identity: &WindowIdentity,
+        _cancel: &Cancellation,
+    ) -> Result<bool> {
+        Ok(false)
+    }
 }
 pub trait CaptureBackend {
     fn capture(&self, snapshot: &WindowSnapshot, cancel: &Cancellation) -> Result<RgbImage>;
+}
+
+pub fn diagnostics(id: Option<&WindowId>) -> Result<serde_json::Value> {
+    #[cfg(windows)]
+    {
+        windows::diagnostics(id)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = id;
+        unsupported()
+    }
 }
 pub trait InputBackend {
     /// Must repeat native foreground / hit testing immediately before injection.

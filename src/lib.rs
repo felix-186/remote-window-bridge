@@ -1,9 +1,12 @@
 pub mod audit;
+mod audit_index;
 pub mod control;
 pub mod error;
 pub mod geometry;
 pub mod image;
 pub mod mcp;
+pub mod performance;
 pub mod platform;
 pub mod service;
+pub mod storage;
 pub mod types;

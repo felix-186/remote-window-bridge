@@ -59,6 +59,28 @@ impl RgbImage {
             .count();
         changed as f64 / (self.width as f64 * self.height as f64).max(1.0)
     }
+
+    /// Inspect a clipped 96x96 neighborhood without diluting a small target into
+    /// the whole viewport. A visual guard, not a semantic correctness check.
+    pub fn difference_near(&self, other: &Self, x: i64, y: i64) -> f64 {
+        if self.width != other.width || self.height != other.height {
+            return 1.0;
+        }
+        let left = (x - 48).clamp(0, self.width as i64) as usize;
+        let right = (x + 48).clamp(0, self.width as i64) as usize;
+        let top = (y - 48).clamp(0, self.height as i64) as usize;
+        let bottom = (y + 48).clamp(0, self.height as i64) as usize;
+        let mut changed = 0usize;
+        for row in top..bottom {
+            for col in left..right {
+                let offset = (row * self.width as usize + col) * 3;
+                if (0..3).any(|c| self.pixels[offset + c].abs_diff(other.pixels[offset + c]) > 30) {
+                    changed += 1;
+                }
+            }
+        }
+        changed as f64 / ((right - left) * (bottom - top)).max(1) as f64
+    }
 }
 fn image_error(e: std::io::Error) -> DesktopError {
     DesktopError::new("IMAGE_ENCODING", e.to_string())
