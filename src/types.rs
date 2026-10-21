@@ -12,14 +12,14 @@ pub struct WindowIdentity {
     pub process_started: u64,
     pub class_name: String,
 }
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowInfo {
     pub identity: WindowIdentity,
     pub title: String,
     pub executable: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WindowSnapshot {
     pub identity: WindowIdentity,
     pub activation: Option<WindowIdentity>,
@@ -148,7 +148,8 @@ fn one() -> u8 {
     1
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ResolvedAction {
     Click {
         point: ScreenPoint,

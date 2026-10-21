@@ -1,8 +1,10 @@
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 use crate::error::DesktopError;
 use crate::{control::Cancellation, error::Result, geometry::Rect, image::RgbImage, types::*};
 
 pub mod clients;
+#[cfg(any(target_os = "macos", feature = "macos-api-check"))]
+pub mod macos;
 #[cfg(any(windows, feature = "windows-api-check"))]
 pub mod windows;
 
@@ -53,7 +55,11 @@ pub fn diagnostics(id: Option<&WindowId>) -> Result<serde_json::Value> {
     {
         windows::diagnostics(id)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        macos::diagnostics(id)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = id;
         unsupported()
@@ -83,23 +89,27 @@ pub fn native(
     {
         Ok(Box::new(windows::WindowsPlatform::new(control)?))
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        Ok(Box::new(macos::MacPlatform::new(control)?))
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = control;
         Ok(Box::new(Unsupported))
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 struct Unsupported;
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn unsupported<T>() -> Result<T> {
     Err(DesktopError::new(
         "PLATFORM_UNSUPPORTED",
-        "This release implements Windows only; macOS/Linux adapters are not installed",
+        "This release implements Windows and macOS; a Linux adapter is not installed",
     ))
 }
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 impl WindowBackend for Unsupported {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
@@ -110,7 +120,7 @@ impl WindowBackend for Unsupported {
             input: false,
             ocr: false,
             global_pause_hotkey: false,
-            notes: vec!["Windows backend only in v0.1".into()],
+            notes: vec!["Windows and macOS backends are available".into()],
         }
     }
     fn list_windows(&self) -> Result<Vec<WindowInfo>> {
@@ -123,13 +133,13 @@ impl WindowBackend for Unsupported {
         unsupported()
     }
 }
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 impl CaptureBackend for Unsupported {
     fn capture(&self, _: &WindowSnapshot, _: &Cancellation) -> Result<RgbImage> {
         unsupported()
     }
 }
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 impl InputBackend for Unsupported {
     fn inject(
         &self,

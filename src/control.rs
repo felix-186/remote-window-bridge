@@ -42,7 +42,7 @@ impl Control {
         if !self.change(0, true) {
             return Err(DesktopError::new(
                 "PAUSED_BY_USER",
-                "Use Ctrl+Alt+F11 on the Windows host to resume",
+                "Resume locally on the host (Windows: Ctrl+Alt+F11)",
             ));
         }
         Ok(())

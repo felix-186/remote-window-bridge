@@ -9,7 +9,7 @@ use std::{
 };
 
 #[test]
-fn executable_speaks_json_lines_and_reports_unsupported_platform_honestly() {
+fn executable_speaks_json_lines_and_reports_platform_support_honestly() {
     let dir =
         std::env::temp_dir().join(format!("remote-window-bridge-stdio-{}", std::process::id()));
     let mut child = Command::new(env!("CARGO_BIN_EXE_remote-window-bridge"))
@@ -62,15 +62,25 @@ fn executable_speaks_json_lines_and_reports_unsupported_platform_honestly() {
         .unwrap()
         .iter()
         .any(|tool| tool["name"] == "desktop_click"));
+    #[cfg(target_os = "macos")]
+    let tool = "desktop_get_status";
+    #[cfg(not(target_os = "macos"))]
+    let tool = "desktop_list_windows";
     send(
         &mut guard.0,
-        json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"desktop_list_windows","arguments":{}}}),
+        json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":tool,"arguments":{}}}),
     );
     let response = read();
-    assert_eq!(response["result"]["isError"], true);
-    let error: Value =
-        serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(error["code"], "PLATFORM_UNSUPPORTED");
+    #[cfg(target_os = "macos")]
+    assert_ne!(response["result"]["isError"], true);
+    #[cfg(not(target_os = "macos"))]
+    {
+        assert_eq!(response["result"]["isError"], true);
+        let error: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(error["code"], "PLATFORM_UNSUPPORTED");
+    }
     guard
         .0
         .stdin

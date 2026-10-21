@@ -18,7 +18,7 @@ fn run() -> Result<()> {
     let mut args = std::env::args().skip(1);
     let command = args.next().unwrap_or_else(|| "help".into());
     if matches!(command.as_str(), "help" | "--help" | "-h") {
-        println!("remote-window-bridge {}\n\nCommands:\n  doctor\n  windows\n  diagnose [--window <opaque-id>]\n  capture --window <opaque-id> [--viewport x,y,width,height] [--output preview.png] [--delay-ms 3000] [--data-dir <directory>]\n  mcp [--transport stdio] [--data-dir <directory>]\n\nWindows host only. Connect the remote client first.\nText input: auto (printable ASCII -> scan_code; other text -> unicode).\nCtrl+Alt+F10: pause   Ctrl+Alt+F11: resume locally\nNo OCR, background capture, or GUI in v0.1. See README.md.",env!("CARGO_PKG_VERSION"));
+        println!("remote-window-bridge {}\n\nCommands:\n  doctor\n  windows\n  diagnose [--window <opaque-id>]\n  capture --window <opaque-id> [--viewport x,y,width,height] [--output preview.png] [--delay-ms 3000] [--data-dir <directory>]\n  mcp [--transport stdio] [--data-dir <directory>]\n\nWindows and macOS 14+ hosts. Connect the remote client first.\nmacOS requires Screen Recording and Accessibility permissions.\nText input: auto (printable ASCII -> scan_code; other text -> unicode).\nWindows: Ctrl+Alt+F10 pauses; Ctrl+Alt+F11 resumes locally.\nmacOS: no global hotkeys; use desktop_pause or stop the process locally.\nNo OCR, background capture, or GUI in v0.1. See README.md.",env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
     let mut options = std::collections::HashMap::new();

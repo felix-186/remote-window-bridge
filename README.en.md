@@ -4,7 +4,7 @@
 
 A remote desktop control tool written in Rust. Codex, Claude Code, and other MCP agents can observe, click, and type through an **already-connected remote desktop window** on the local machine, such as RDP, ToDesk, or Sunlogin. No remote-window-bridge service needs to be installed on the remote computer.
 
-Current release: **0.1.0, initial Windows CLI and MCP stdio implementation**. The shared core builds and runs tests on macOS and Linux, but native desktop backends for those platforms are not implemented. Builds, type checks, and tests do not replace acceptance testing with real remote desktop clients on Windows.
+Current release: **0.1.0, Windows CLI and MCP stdio, with an experimental macOS 14+ backend**. macOS uses ScreenCaptureKit, Accessibility, and Quartz. Linux supports the shared core only. The macOS native code still requires a Mac build and real desktop acceptance testing; type checks do not establish desktop compatibility.
 
 ## Implemented features
 
@@ -143,6 +143,8 @@ The protocol layer implements stdio, initialization, ping, tool discovery and ca
 
 ### Performance and scene checks
 
+Windows reuses its memory DC and DIB for matching capture dimensions, rebuilding on resize or capture failure. All existing pre/post-capture checks remain. PNG encoding buffers scanline writes without changing lossless RGB output. Run `cargo run --release --example png_bench` to compare the previous encoder with the buffered encoder on synthetic 720p/1080p desktop-like and noise images. These measurements cover encoding, not end-to-end latency.
+
 Intermediate `desktop_wait` samples capture and compare RGB buffers in memory. Only the final sample is encoded and saved as PNG. Input preflight still verifies geometry, control generation, and the fresh scene. Coordinate actions additionally compare a clipped 96×96 pixel neighborhood around the target and reject changes above 4%, preventing small target changes from disappearing in a viewport-wide average. Cursors and animations can cause conservative rejection; observe again rather than automatically replaying input.
 
 `desktop_get_status.performance` exposes timings and call counts for the last 32 MCP requests in microseconds: `queue`, `activate`, `inspect`, `capture`, `scene_check`, `audit`, `inject`, `settle`, `encode_png`, `frame_write`, `response_encode`, and `transport_write`. `dispatch` and `action_total` include nested stages, so durations must not be added together. `inject` includes native input checks. Metrics contain no command text, exclude model reasoning time, and do not prove remote execution. Complete timings for the current status call become visible on the next request.
@@ -154,7 +156,28 @@ Intermediate `desktop_wait` samples capture and compare RGB buffers in memory. O
 - `InputBackend`: execute mapped actions and repeat native focus and hit checks before injection.
 - `OcrProvider`: an optional interface for text recognition, confidence scores, and bounding boxes.
 
-The Windows entry point is [src/platform/windows.rs](src/platform/windows.rs), with window resolution/activation, capture, and input split into `src/platform/windows/window.rs`, `capture.rs`, and `input.rs`. Pure client policy lives in `src/platform/clients.rs`, recognizing AweSun and RustDesk session classes together with their executables. `window_diagnostics.target.client_profile` reports policy and a suggested echo delay; hints never override `settle_ms` automatically. Shared session, frame, cancellation, audit, coordinate, and MCP logic does not depend on Win32. Future macOS support can use native capture and input APIs; Linux requires separate X11 and Wayland adapters.
+The Windows entry point is [src/platform/windows.rs](src/platform/windows.rs), with window resolution/activation, capture, and input split into `src/platform/windows/window.rs`, `capture.rs`, and `input.rs`. Pure client policy lives in `src/platform/clients.rs`, recognizing AweSun and RustDesk session classes together with their executables. `window_diagnostics.target.client_profile` reports policy and a suggested echo delay; hints never override `settle_ms` automatically. The macOS adapter is [src/platform/macos.rs](src/platform/macos.rs), with native APIs in [Bridge.swift](src/platform/macos/Bridge.swift). Shared session, frame, cancellation, audit, coordinate, and MCP logic does not depend on Win32. Linux requires separate X11 and Wayland adapters.
+
+### macOS 14+ (experimental)
+
+Install Rust and Xcode Command Line Tools (`xcode-select --install`), then build on a Mac:
+
+```sh
+MACOSX_DEPLOYMENT_TARGET=14.0 cargo build --locked --release
+./target/release/remote-window-bridge doctor
+./target/release/remote-window-bridge diagnose
+./target/release/remote-window-bridge windows
+./target/release/remote-window-bridge capture --window mac:123 --viewport 0,40,1200,700 --output preview.png
+./target/release/remote-window-bridge mcp --transport stdio
+```
+
+Replace the window ID and viewport with actual values. The build compiles a Swift helper with `xcrun swiftc` and embeds it in the Rust executable. At runtime it is cached in `~/Library/Caches/remote-window-bridge/<content-hash>/macos-bridge`. A persistent pipe carries commands and binary RGB frames without starting a new process for each operation. Updating the helper may require granting permissions again.
+
+Grant Screen Recording (called Screen & System Audio Recording on some releases) and Accessibility permissions to the launching application/native helper in System Settings → Privacy & Security, then restart the launching application if needed. `diagnose` and `desktop_get_status.permissions` report permission state; no automatic permission prompts or elevation occur. `doctor` reports implemented capabilities only.
+
+Supports enumeration, activation, viewport capture, mouse buttons/movement/scrolling, Unicode/ASCII physical-key text, and key chords. Requires a foreground, unobstructed window on the unlocked current desktop, entirely inside one display. Retina scale is converted at the platform boundary; windows spanning displays are rejected. Window bounds include local title bars: calibrate the viewport. Ambiguous Accessibility window matches are rejected. Keyboard input requires a content click and checks cancellation/focus for each character. Native request timeouts stop the helper without replaying input; a lost input reply is reported as uncertain and pauses control.
+
+macOS has **no global pause/resume hotkey** yet. Use `desktop_pause` or stop the process locally; Windows Ctrl+Alt+F10/F11 shortcuts do not apply. Physical-input takeover detection and OCR are unavailable. CI includes Swift compilation and a native-helper startup check without desktop input. Actual permissions, screenshots, keyboard behavior, Retina displays, and remote clients still require Mac acceptance testing.
 
 ## Data and limitations
 
@@ -236,7 +259,7 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo check --locked --features windows-api-check
 ```
 
-After installing Rust on macOS/Linux, you can run the build and check commands above, `doctor`, and the MCP protocol server. Window enumeration, capture, and input return `PLATFORM_UNSUPPORTED`. The last command type-checks native Windows code on a non-Windows development host. **It does not verify Windows linking or real desktop behavior.** The feature is for development, not release builds.
+macOS additionally requires Xcode Command Line Tools and macOS 14+. Linux window enumeration, capture, and input still return `PLATFORM_UNSUPPORTED`. `windows-api-check` type-checks Windows code on other hosts. `cargo check --locked --features macos-api-check` checks the Rust macOS bridge on other hosts; **it does not compile Swift or verify native desktop behavior**. These features are for development, not release builds.
 
 This README and the implementation define the current release's scope.
 

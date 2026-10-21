@@ -914,6 +914,27 @@ fn partial_injection_pauses_further_actions() {
 }
 
 #[test]
+fn lost_native_reply_is_uncertain_even_without_a_confirmed_event_count() {
+    let mut f = Fixture::new();
+    let request = f.click("lost-reply");
+    f.state.lock().unwrap().failure = Some(DesktopError::new(
+        "INPUT_OUTCOME_UNKNOWN",
+        "native process stopped before acknowledging input",
+    ));
+    let receipt = f.service.perform(request.clone()).unwrap();
+    assert_eq!(receipt.execution_status, "uncertain");
+    assert_eq!(receipt.sent_events, 0);
+    assert_eq!(f.service.control.reason(), "agent");
+    assert!(f.service.frame.is_none());
+    f.state.lock().unwrap().failure = None;
+    assert_eq!(
+        f.service.perform(request).unwrap().execution_status,
+        "uncertain"
+    );
+    assert_eq!(f.state.lock().unwrap().injections, 0);
+}
+
+#[test]
 fn audit_cannot_append_an_outcome_without_intent() {
     let temp = Temp::new();
     let path = temp.0.join("audit.jsonl");

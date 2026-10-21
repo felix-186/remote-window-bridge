@@ -9,6 +9,8 @@ license = "MIT"
 [features]
 # Type-check native bindings on a non-Windows development host. Do not ship this feature.
 windows-api-check = []
+# Type-check the portable macOS bridge without compiling its Swift helper.
+macos-api-check = []
 
 [dependencies]
 serde = { version = "=1.0.217", features = ["derive"] }

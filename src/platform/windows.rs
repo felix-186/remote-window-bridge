@@ -51,6 +51,7 @@ impl Drop for Handle {
 }
 
 pub struct WindowsPlatform {
+    capture_resources: std::sync::Mutex<Option<capture::CaptureResources>>,
     _hotkeys: Hotkeys,
     _lock: Handle,
     keyboard_anchor: AtomicUsize,
@@ -103,6 +104,7 @@ impl WindowsPlatform {
             }
             let hotkeys = Hotkeys::start(control)?;
             Ok(Self {
+                capture_resources: std::sync::Mutex::new(None),
                 _lock: lock,
                 _hotkeys: hotkeys,
                 keyboard_anchor: AtomicUsize::new(0),

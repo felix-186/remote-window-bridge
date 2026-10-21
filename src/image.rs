@@ -1,6 +1,6 @@
 use crate::error::{DesktopError, Result};
 use flate2::{write::ZlibEncoder, Compression};
-use std::io::Write;
+use std::io::{BufWriter, Write};
 
 /// Tight RGB8 rows, top to bottom. Platform-specific BGRA never crosses this boundary.
 #[derive(Debug, Clone)]
@@ -29,13 +29,21 @@ impl RgbImage {
     }
     pub fn png(&self) -> Result<Vec<u8>> {
         self.validate()?;
-        let mut zlib = ZlibEncoder::new(Vec::new(), Compression::fast());
+        // Coalesce tiny filter-byte and scanline writes before compression.
+        let mut zlib = BufWriter::with_capacity(
+            256 * 1024,
+            ZlibEncoder::new(Vec::new(), Compression::fast()),
+        );
         for row in self.pixels.chunks_exact(self.width as usize * 3) {
             zlib.write_all(&[0])
                 .and_then(|_| zlib.write_all(row))
                 .map_err(image_error)?;
         }
-        let compressed = zlib.finish().map_err(image_error)?;
+        let compressed = zlib
+            .into_inner()
+            .map_err(|e| image_error(e.into_error()))?
+            .finish()
+            .map_err(image_error)?;
         let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
         let mut header = Vec::new();
         header.extend(self.width.to_be_bytes());
@@ -93,4 +101,49 @@ fn chunk(out: &mut Vec<u8>, name: &[u8; 4], data: &[u8]) {
     crc.update(name);
     crc.update(data);
     out.extend(crc.finalize().to_be_bytes());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+    #[test]
+    fn buffered_png_roundtrips_across_buffer_boundaries() {
+        for (width, height) in [(1, 2), (257, 401), (32768, 3)] {
+            let pixels: Vec<u8> = (0..width as usize * height as usize * 3)
+                .map(|n| (n.wrapping_mul(31) >> 5) as u8)
+                .collect();
+            let image = RgbImage {
+                width,
+                height,
+                pixels,
+            };
+            let png = image.png().unwrap();
+            let mut offset = 8;
+            let mut idat = Vec::new();
+            while offset < png.len() {
+                let len = u32::from_be_bytes(png[offset..offset + 4].try_into().unwrap()) as usize;
+                let crc = u32::from_be_bytes(
+                    png[offset + 8 + len..offset + 12 + len].try_into().unwrap(),
+                );
+                assert_eq!(crc32fast::hash(&png[offset + 4..offset + 8 + len]), crc);
+                if &png[offset + 4..offset + 8] == b"IDAT" {
+                    idat.extend_from_slice(&png[offset + 8..offset + 8 + len]);
+                }
+                offset += len + 12;
+            }
+            let mut raw = Vec::new();
+            flate2::read::ZlibDecoder::new(&idat[..])
+                .read_to_end(&mut raw)
+                .unwrap();
+            assert_eq!(raw.len(), (width as usize * 3 + 1) * height as usize);
+            for (row, expected) in raw
+                .chunks_exact(width as usize * 3 + 1)
+                .zip(image.pixels.chunks_exact(width as usize * 3))
+            {
+                assert_eq!(row[0], 0);
+                assert_eq!(&row[1..], expected);
+            }
+        }
+    }
 }

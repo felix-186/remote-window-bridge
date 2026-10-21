@@ -481,7 +481,9 @@ impl DesktopService {
                 self.session.as_mut().unwrap().keyboard_generation = None;
                 ActionReceipt {
                     action_id: request.action_id,
-                    execution_status: if error.sent_events.unwrap_or(0) > 0 {
+                    execution_status: if error.sent_events.unwrap_or(0) > 0
+                        || error.code == "INPUT_OUTCOME_UNKNOWN"
+                    {
                         "uncertain"
                     } else {
                         "rejected"

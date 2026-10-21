@@ -4,7 +4,7 @@
 
 Rust 编写的远程桌面控制工具。Codex、Claude Code 或其他 MCP Agent，通过本机已经连接的 RDP / ToDesk / 向日葵窗口观察、点击和输入；远端无需安装本项目服务。
 
-当前版本：**0.1.0，Windows CLI + MCP stdio 初版**。macOS/Linux 可编译和测试公共内核，真实桌面后端尚未实现。构建、类型检查与测试不能替代 Windows 远程客户端的实机验收。
+当前版本：**0.1.0，Windows CLI + MCP stdio，新增实验性 macOS 14+ 后端**。macOS 原生后端使用 ScreenCaptureKit、Accessibility 和 Quartz；Linux 仍仅支持公共内核。macOS 代码尚待 Mac 构建和实机验收；构建、类型检查与测试不能替代真实远程客户端验收。
 
 ## 已实现
 
@@ -143,6 +143,8 @@ cargo run --locked -- diagnose --window win:e0fda
 
 ### 性能与画面校验
 
+Windows 按截图尺寸复用内存 DC 和 DIB，尺寸变化或捕获失败时重建，省去每次采样的 GDI 创建/销毁；输入前后检查仍执行。PNG 编码合并逐行写入，保持无损 RGB。可运行 `cargo run --release --example png_bench` 比较旧编码器和当前编码器，覆盖 720p/1080p 的桌面色块和随机噪声；结果仅代表本机合成图像编码，不能当作端到端延迟。
+
 `desktop_wait` 的中间采样仅捕获 RGB 并在内存中比较，结束时才编码和保存一张 PNG。输入前仍重新捕获并检查几何、控制代次和场景；带坐标的动作还检查操作点周围的 96×96 像素区域（边界处裁剪，变化比例超过 4% 时拒绝），避免小目标变化被整张截图稀释。光标、动画可能导致保守拒绝，此时重新观察，不自动重放动作。
 
 `desktop_get_status.performance` 返回最近 32 次 MCP 请求的分阶段耗时和调用次数，单位为微秒：`queue`、`activate`、`inspect`、`capture`、`scene_check`、`audit`、`inject`、`settle`、`encode_png`、`frame_write`、`response_encode` 和 `transport_write`。`dispatch`、`action_total` 包含内部阶段，不能相加；`inject` 包括原生输入前检查。记录不包含命令文字；不衡量模型思考时间，也不能单独证明远端已执行成功。当前状态请求的完整耗时在下一次请求中可见。
@@ -154,7 +156,28 @@ cargo run --locked -- diagnose --window win:e0fda
 - `InputBackend`：执行转换后的动作，平台内再次检查焦点和命中。
 - `OcrProvider`：可选文字、置信度和 bbox 识别接口。
 
-Windows 后端入口位于 [src/platform/windows.rs](src/platform/windows.rs)，窗口解析与激活、捕获、输入分别位于 `src/platform/windows/window.rs`、`capture.rs`、`input.rs`。纯客户端策略位于 `src/platform/clients.rs`，按可执行文件和窗口类识别向日葵、RustDesk 会话；`window_diagnostics.target.client_profile` 提供策略和回显等待建议，建议值不会自动覆盖 `settle_ms`。会话、帧、取消、审计、坐标和 MCP 逻辑不依赖 Win32。后续 macOS 接入系统截图/输入 API；Linux 分别适配 X11、Wayland。
+Windows 后端入口位于 [src/platform/windows.rs](src/platform/windows.rs)，窗口解析与激活、捕获、输入分别位于 `src/platform/windows/window.rs`、`capture.rs`、`input.rs`。纯客户端策略位于 `src/platform/clients.rs`，按可执行文件和窗口类识别向日葵、RustDesk 会话；`window_diagnostics.target.client_profile` 提供策略和回显等待建议，建议值不会自动覆盖 `settle_ms`。macOS 入口为 [src/platform/macos.rs](src/platform/macos.rs)，原生 API 在 [Bridge.swift](src/platform/macos/Bridge.swift)。会话、帧、取消、审计、坐标和 MCP 逻辑不依赖 Win32。Linux 尚待适配 X11、Wayland。
+
+### macOS 14+（实验性）
+
+需要 Rust 和 Xcode Command Line Tools（`xcode-select --install`）。在 Mac 上构建：
+
+```sh
+MACOSX_DEPLOYMENT_TARGET=14.0 cargo build --locked --release
+./target/release/remote-window-bridge doctor
+./target/release/remote-window-bridge diagnose
+./target/release/remote-window-bridge windows
+./target/release/remote-window-bridge capture --window mac:123 --viewport 0,40,1200,700 --output preview.png
+./target/release/remote-window-bridge mcp --transport stdio
+```
+
+`mac:123` 和 viewport 需替换为实际窗口 ID 与内容区。构建时 `xcrun swiftc` 编译原生辅助程序并嵌入 Rust 可执行文件；运行时缓存到 `~/Library/Caches/remote-window-bridge/<内容哈希>/macos-bridge`，通过常驻管道传送命令和二进制 RGB，不为每次操作重启进程。更新版本可能需要重新授权。
+
+在“系统设置 → 隐私与安全性”授予启动应用/原生辅助程序“屏幕与系统音频录制”（部分版本称“屏幕录制”）和“辅助功能”权限，必要时重启启动应用。`diagnose` 和 `desktop_get_status.permissions` 可查看权限；不会自动弹授权窗口或提权。`doctor` 只报告已实现能力。
+
+支持窗口枚举、激活、视口截图、点击、移动、滚动、Unicode/ASCII 物理键输入和组合键。窗口必须位于已解锁的当前桌面、前台且无遮挡，并完整位于一块显示器内；Retina 比例在系统边界转换，跨屏窗口会拒绝。macOS 的窗口边界包含标题栏，必须校准 viewport 排除本地工具栏；Accessibility 无法唯一匹配窗口时会拒绝。键盘输入须先点击内容区，逐字符检查取消和焦点；原生请求超时后停止辅助进程，不自动重放输入。
+
+macOS **尚无全局暂停/恢复热键**，可使用 `desktop_pause`，本机可停止进程。Windows 的 Ctrl+Alt+F10/F11 不适用于 Mac；尚无物理输入接管检测或 OCR。CI 配置包含 Mac 的 Swift 编译与无桌面输入的辅助程序启动检查；真实截图、权限、键盘、Retina 及远程客户端仍需 Mac 实机验证。
 
 ## 数据与限制
 
@@ -236,7 +259,7 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo check --locked --features windows-api-check
 ```
 
-macOS/Linux 安装 Rust 后可运行上述构建和检查命令，以及 `doctor` 和 MCP 协议服务；窗口枚举、截图和输入会返回 `PLATFORM_UNSUPPORTED`。最后一条允许非 Windows 主机类型检查原生代码，**不等于 Windows 链接或实机验收**。该开发特性不用于发布。
+macOS 另需 Xcode Command Line Tools，并要求 macOS 14+。Linux 的窗口枚举、截图和输入仍返回 `PLATFORM_UNSUPPORTED`。`windows-api-check` 允许非 Windows 主机类型检查 Windows 原生代码；`cargo check --locked --features macos-api-check` 允许非 Mac 主机检查 Rust 桥接代码，**不编译 Swift，也不等于 macOS 实机验收**。这两个开发特性不用于发布。
 
 本版范围以本 README 和实现为准。
 
